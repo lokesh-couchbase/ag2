@@ -1,39 +1,30 @@
-# Copyright (c) 2023 - 2024, Owners of https://github.com/ag2ai
+# Copyright (c) 2023 - 2025, AG2ai, Inc., AG2ai open-source projects maintainers and core contributors
 #
 # SPDX-License-Identifier: Apache-2.0
 #
 # Portions derived from  https://github.com/microsoft/autogen are under the MIT License.
 # SPDX-License-Identifier: MIT
-#!/usr/bin/env python3 -m pytest
+# !/usr/bin/env python3 -m pytest
 
 import inspect
 import json
-import os
 import sys
 
 import pytest
-from test_assistant_agent import KEY_LOC, OAI_CONFIG_LIST
 
 import autogen
+from autogen.import_utils import skip_on_missing_imports
 from autogen.math_utils import eval_math_responses
 from autogen.oai.client import TOOL_ENABLED
 
-try:
-    from openai import OpenAI
-except ImportError:
-    skip_openai = True
-else:
-    sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-    from conftest import skip_openai
+from ..conftest import Credentials
 
 
-@pytest.mark.skipif(skip_openai or not TOOL_ENABLED, reason="openai>=1.1.0 not installed or requested to skip")
-def test_eval_math_responses():
-    config_list = autogen.config_list_from_json(
-        OAI_CONFIG_LIST,
-        KEY_LOC,
-        filter_dict={"tags": ["tool"]},
-    )
+@pytest.mark.openai
+@pytest.mark.skipif(not TOOL_ENABLED, reason="openai>=1.1.0 not installed or requested to skip")
+@skip_on_missing_imports(["openai"])
+def test_eval_math_responses(credentials_gpt_4o_mini: Credentials):
+    config_list = credentials_gpt_4o_mini.config_list
     tools = [
         {
             "type": "function",
@@ -84,18 +75,11 @@ def test_eval_math_responses():
     print(eval_math_responses(**arguments))
 
 
-@pytest.mark.skipif(skip_openai or not TOOL_ENABLED, reason="openai>=1.1.0 not installed or requested to skip")
-def test_eval_math_responses_api_style_function():
-    # config_list = autogen.config_list_from_models(
-    #     KEY_LOC,
-    #     model_list=["gpt-4-0613", "gpt-3.5-turbo-0613", "gpt-3.5-turbo-16k"],
-    # )
-
-    config_list = autogen.config_list_from_json(
-        OAI_CONFIG_LIST,
-        KEY_LOC,
-        filter_dict={"tags": ["tool"]},
-    )
+@pytest.mark.openai
+@pytest.mark.skipif(not TOOL_ENABLED, reason="openai>=1.1.0 not installed or requested to skip")
+@skip_on_missing_imports(["openai"])
+def test_eval_math_responses_api_style_function(credentials_gpt_4o_mini: Credentials):
+    config_list = credentials_gpt_4o_mini.config_list
     functions = [
         {
             "name": "eval_math_responses",
@@ -142,20 +126,15 @@ def test_eval_math_responses_api_style_function():
     print(eval_math_responses(**arguments))
 
 
+@pytest.mark.openai
 @pytest.mark.skipif(
-    skip_openai or not TOOL_ENABLED or not sys.version.startswith("3.10"),
+    not TOOL_ENABLED or not sys.version.startswith("3.10"),
     reason="do not run if openai is <1.1.0 or py!=3.10 or requested to skip",
 )
-def test_update_tool():
-    config_list_gpt4 = autogen.config_list_from_json(
-        OAI_CONFIG_LIST,
-        filter_dict={
-            "tags": ["gpt-4"],
-        },
-        file_location=KEY_LOC,
-    )
+@skip_on_missing_imports(["openai"])
+def test_update_tool(credentials_gpt_4o: Credentials):
     llm_config = {
-        "config_list": config_list_gpt4,
+        "config_list": credentials_gpt_4o.config_list,
         "seed": 42,
         "tools": [],
     }
@@ -163,7 +142,7 @@ def test_update_tool():
     user_proxy = autogen.UserProxyAgent(
         name="user_proxy",
         human_input_mode="NEVER",
-        is_termination_msg=lambda x: True if "TERMINATE" in x.get("content") else False,
+        is_termination_msg=lambda x: "TERMINATE" in x.get("content"),
     )
     assistant = autogen.AssistantAgent(name="test", llm_config=llm_config)
 
@@ -188,11 +167,10 @@ def test_update_tool():
         message="What functions do you know about in the context of this conversation? End your response with 'TERMINATE'.",
     )
     messages1 = assistant.chat_messages[user_proxy][-1]["content"]
-    print("Message:", messages1)
     print("Summary:", res.summary)
-    assert (
-        messages1.replace("TERMINATE", "") == res.summary
-    ), "Message (removing TERMINATE) and summary should be the same"
+    assert messages1.replace("TERMINATE", "") == res.summary, (
+        "Message (removing TERMINATE) and summary should be the same"
+    )
 
     assistant.update_tool_signature("greet_user", is_remove=True)
     res = user_proxy.initiate_chat(
@@ -201,7 +179,6 @@ def test_update_tool():
         summary_method="reflection_with_llm",
     )
     messages2 = assistant.chat_messages[user_proxy][-1]["content"]
-    print("Message2:", messages2)
     # The model should know about the function in the context of the conversation
     assert "greet_user" in messages1
     assert "greet_user" not in messages2
@@ -237,7 +214,7 @@ def test_multi_tool_call():
     user_proxy = autogen.UserProxyAgent(
         name="user_proxy",
         human_input_mode="NEVER",
-        is_termination_msg=lambda x: True if "TERMINATE" in x.get("content") else False,
+        is_termination_msg=lambda x: "TERMINATE" in x.get("content"),
     )
     user_proxy.register_function({"echo": lambda str: str})
 
@@ -334,7 +311,7 @@ async def test_async_multi_tool_call():
     user_proxy = autogen.UserProxyAgent(
         name="user_proxy",
         human_input_mode="NEVER",
-        is_termination_msg=lambda x: True if "TERMINATE" in x.get("content") else False,
+        is_termination_msg=lambda x: "TERMINATE" in x.get("content"),
     )
 
     def echo(str):
