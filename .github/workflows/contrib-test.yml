@@ -48,18 +48,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install packages and dependencies for RetrieveChat
         run: |
-          uv pip install --system -e .[test,retrievechat]
-      - name: Install qdrant_client when python-version is 3.10
-        if: matrix.python-version == '3.10'
-        run: |
-          uv pip install --system -e .[retrievechat-qdrant]
+          uv pip install --system -e .[test,retrievechat,retrievechat-qdrant]
       - name: Set AUTOGEN_USE_DOCKER based on OS
         shell: bash
         run: |
           if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/test_retrieve_utils.py test/agentchat/contrib/retrievechat/test_retrievechat.py test/agentchat/contrib/retrievechat/test_qdrant_retrievechat.py test/agentchat/contrib/vectordb
       - name: Show coverage report
@@ -119,8 +115,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y tesseract-ocr poppler-utils
           uv pip install --system --no-cache-dir unstructured[all-docs]==0.13.0
-      - name: Install qdrant_client when python-version is 3.10
-        if: matrix.python-version == '3.10'
+      - name: Install qdrant_client when python-version is not 3.9
+        if: matrix.python-version != '3.9'
         run: |
           uv pip install --system -e .[retrievechat-qdrant]
       - name: Install pgvector when on linux
@@ -133,7 +129,7 @@ jobs:
         shell: bash
         run: |
           echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/test_retrieve_utils.py test/agentchat/contrib/retrievechat test/agentchat/contrib/vectordb
       - name: Show coverage report
@@ -166,7 +162,7 @@ jobs:
       - name: Install packages and dependencies for AgentEval
         run: |
           uv pip install --system -e .[test]
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/agentchat/contrib/agent_eval/
       - name: Show coverage report
@@ -205,7 +201,7 @@ jobs:
           if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/agentchat/contrib/test_gpt_assistant.py
       - name: Show coverage report
@@ -244,7 +240,7 @@ jobs:
           if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/agentchat/contrib/capabilities/test_teachable_agent.py
       - name: Show coverage report
@@ -283,7 +279,7 @@ jobs:
           if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/test_browser_utils.py test/agentchat/contrib/test_web_surfer.py
       - name: Show coverage report
@@ -324,7 +320,7 @@ jobs:
           if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/agentchat/contrib/test_img_utils.py test/agentchat/contrib/test_lmm.py test/agentchat/contrib/test_llava.py test/agentchat/contrib/capabilities/test_vision_capability.py
       - name: Image Gen Coverage
@@ -372,7 +368,7 @@ jobs:
           if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/oai/test_gemini.py
       - name: Show coverage report
@@ -411,7 +407,7 @@ jobs:
           if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/agentchat/contrib/capabilities/test_transform_messages.py
       - name: Show coverage report
@@ -445,7 +441,7 @@ jobs:
         run: |
           uv pip install --system -e .[test]
           uv pip install --system llama-index llama-index-llms-openai
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/agentchat/contrib/test_llamaindex_conversable_agent.py
       - name: Show coverage report
@@ -489,7 +485,7 @@ jobs:
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
 
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/oai/test_anthropic.py
       - name: Show coverage report
@@ -533,7 +529,7 @@ jobs:
           if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/oai/test_cerebras.py
       - name: Show coverage report
@@ -577,7 +573,7 @@ jobs:
           if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/oai/test_mistral.py
       - name: Show coverage report
@@ -621,7 +617,7 @@ jobs:
           if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/oai/test_together.py
       - name: Show coverage report
@@ -665,7 +661,7 @@ jobs:
           if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/oai/test_groq.py
       - name: Show coverage report
@@ -705,7 +701,7 @@ jobs:
           if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/oai/test_cohere.py
       - name: Show coverage report
@@ -749,7 +745,7 @@ jobs:
           if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/oai/test_ollama.py
       - name: Show coverage report
@@ -793,7 +789,7 @@ jobs:
           if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/oai/test_bedrock.py
       - name: Show coverage report
@@ -837,7 +833,7 @@ jobs:
           if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
             echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
           fi
-      - name: Coverage
+      - name: Run tests
         run: |
           bash scripts/test-skip-llm.sh test/agentchat/contrib/test_swarm.py
       - name: Show coverage report
@@ -892,7 +888,7 @@ jobs:
             if [[ ${{ matrix.os }} != ubuntu-latest ]]; then
               echo "AUTOGEN_USE_DOCKER=False" >> $GITHUB_ENV
             fi
-        - name: Coverage
+        - name: Run tests
           run: |
             bash scripts/test-skip-llm.sh test/agentchat/contrib/test_reasoning_agent.py
         - name: Show coverage report
