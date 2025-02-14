@@ -4,10 +4,11 @@
 #
 # Portions derived from  https://github.com/microsoft/autogen are under the MIT License.
 # SPDX-License-Identifier: MIT
+
 import json
 import time
 from datetime import timedelta
-from typing import Any, Callable, Dict, List, Literal, Tuple, Union
+from typing import Any, Callable, Literal, Optional
 
 import numpy as np
 
@@ -45,10 +46,10 @@ class CouchbaseVectorDB(VectorDB):
         username: str = "Administrator",
         password: str = "password",
         bucket_name: str = "vector_db",
-        embedding_function: Callable = SentenceTransformer("all-MiniLM-L6-v2").encode,
+        embedding_function: Optional[Callable[..., Any]] = None,
         scope_name: str = "_default",
         collection_name: str = "_default",
-        index_name: str = None,
+        index_name: Optional[str] = None,
     ):
         """
         Initialize the vector database.
@@ -66,8 +67,10 @@ class CouchbaseVectorDB(VectorDB):
             wait_until_document_ready (float | None): Blocking call to wait until the database documents are ready. None means no wait. Default is None.
         """
 
-        self.embedding_function = embedding_function
-        self.index_name = index_name
+        self.embedding_function: Callable[..., Any] = (
+            embedding_function or SentenceTransformer("all-MiniLM-L6-v2").encode
+        )  # type: ignore[assignment]
+        self.index_name: str = index_name  # type: ignore[assignment]
 
         # This will get the model dimension size by computing the embeddings dimensions
         self.dimensions = self._get_embedding_size()
@@ -87,24 +90,24 @@ class CouchbaseVectorDB(VectorDB):
         except Exception as err:
             raise ConnectionError("Could not connect to Couchbase server") from err
 
-    def search_index_exists(self, index_name: str):
+    def search_index_exists(self, index_name: str) -> bool:
         """Check if the specified index is ready"""
         try:
             search_index_mgr = self.scope.search_indexes()
             index = search_index_mgr.get_index(index_name)
-            return index.is_valid()
+            return index.is_valid()  # type: ignore[no-any-return]
         except Exception:
             return False
 
-    def _get_embedding_size(self):
+    def _get_embedding_size(self) -> int:
         return len(self.embedding_function(_SAMPLE_SENTENCE)[0])
 
-    def create_collection(
+    def create_collection(  # type: ignore[no-any-unimported]
         self,
         collection_name: str,
         overwrite: bool = False,
         get_or_create: bool = True,
-    ) -> Collection:
+    ) -> "Collection":
         """
         Create a collection in the vector database and create a vector search index in the collection.
         Args:
@@ -130,7 +133,11 @@ class CouchbaseVectorDB(VectorDB):
         self.create_index_if_not_exists(index_name=self.index_name, collection=collection)
         return collection
 
-    def create_index_if_not_exists(self, index_name: str = "vector_index", collection=None) -> None:
+    def create_index_if_not_exists(  # type: ignore[no-any-unimported]
+        self,
+        index_name: str = "vector_index",
+        collection: "Optional[Collection]" = None,
+    ) -> None:
         """
         Creates a vector search index on the specified collection in Couchbase.
         Args:
@@ -140,7 +147,7 @@ class CouchbaseVectorDB(VectorDB):
         if not self.search_index_exists(index_name):
             self.create_vector_search_index(collection, index_name)
 
-    def get_collection(self, collection_name: str | None = None) -> Collection:
+    def get_collection(self, collection_name: Optional[str] = None) -> "Collection":  # type: ignore[no-any-unimported]
         """
         Get the collection from the vector database.
         Args:
@@ -173,10 +180,10 @@ class CouchbaseVectorDB(VectorDB):
         except Exception as e:
             logger.error(f"Error deleting collection: {e}")
 
-    def create_vector_search_index(
+    def create_vector_search_index(  # type: ignore[no-any-unimported]
         self,
-        collection,
-        index_name: Union[str, None] = "vector_index",
+        collection: "Collection",
+        index_name: str = "vector_index",
         similarity: Literal["l2_norm", "dot_product"] = "dot_product",
     ) -> None:
         """Create a vector search index in the collection."""
@@ -266,8 +273,12 @@ class CouchbaseVectorDB(VectorDB):
 
         logger.info(f"Search index {index_name} created successfully.")
 
-    def upsert_docs(
-        self, docs: List[Document], collection: Collection, batch_size=DEFAULT_BATCH_SIZE, **kwargs: Any
+    def upsert_docs(  # type: ignore[no-any-unimported]
+        self,
+        docs: list[Document],
+        collection: "Collection",
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        **kwargs: Any,
     ) -> None:
         if docs[0].get("content") is None:
             raise ValueError("The document content is required.")
@@ -276,7 +287,7 @@ class CouchbaseVectorDB(VectorDB):
 
         for i in range(0, len(docs), batch_size):
             batch = docs[i : i + batch_size]
-            docs_to_upsert = dict()
+            docs_to_upsert = {}
             for doc in batch:
                 doc_id = doc["id"]
                 embedding = self.embedding_function([
@@ -293,11 +304,11 @@ class CouchbaseVectorDB(VectorDB):
 
     def insert_docs(
         self,
-        docs: List[Document],
-        collection_name: str = None,
+        docs: "list[Document]",
+        collection_name: Optional[str] = None,
         upsert: bool = False,
-        batch_size=DEFAULT_BATCH_SIZE,
-        **kwargs,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        **kwargs: Any,
     ) -> None:
         """Insert Documents and Vector Embeddings into the collection of the vector database. Documents are upserted in all cases."""
         if not docs:
@@ -308,13 +319,23 @@ class CouchbaseVectorDB(VectorDB):
         self.upsert_docs(docs, collection, batch_size=batch_size)
 
     def update_docs(
-        self, docs: List[Document], collection_name: str = None, batch_size=DEFAULT_BATCH_SIZE, **kwargs: Any
+        self,
+        docs: list[Document],
+        collection_name: Optional[str] = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        **kwargs: Any,
     ) -> None:
         """Update documents, including their embeddings, in the Collection."""
         collection = self.get_collection(collection_name)
         self.upsert_docs(docs, collection, batch_size)
 
-    def delete_docs(self, ids: List[ItemID], collection_name: str = None, batch_size=DEFAULT_BATCH_SIZE, **kwargs):
+    def delete_docs(
+        self,
+        ids: list[ItemID],
+        collection_name: Optional[str] = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        **kwargs: Any,
+    ) -> None:
         """Delete documents from the collection of the vector database."""
         collection = self.get_collection(collection_name)
         # based on batch size, delete the documents
@@ -323,8 +344,12 @@ class CouchbaseVectorDB(VectorDB):
             collection.remove_multi(batch)
 
     def get_docs_by_ids(
-        self, ids: List[ItemID] | None = None, collection_name: str = None, include: List[str] | None = None, **kwargs
-    ) -> List[Document]:
+        self,
+        ids: Optional[list[ItemID]] = None,
+        collection_name: Optional[str] = None,
+        include: Optional[list[str]] = None,
+        **kwargs: Any,
+    ) -> list[Document]:
         """Retrieve documents from the collection of the vector database based on the ids."""
         if include is None:
             include = [TEXT_KEY, "metadata", "id"]
@@ -343,32 +368,37 @@ class CouchbaseVectorDB(VectorDB):
             for row in result:
                 docs.append(row)
 
-        return [{k: v for k, v in doc.items() if k in include or k == "id"} for doc in docs]
+        # todo: return type is wrong, should be List[Document]
+        return [{k: v for k, v in doc.items() if k in include or k == "id"} for doc in docs]  # type: ignore[misc]
 
-    def retrieve_docs(
+    def retrieve_docs(  # type: ignore[no-any-unimported]
         self,
-        queries: List[str],
-        collection_name: str = None,
+        queries: list[str],
+        collection_name: Optional[str] = None,
         n_results: int = 10,
         distance_threshold: float = -1,
-        **kwargs,
+        **kwargs: Any,
     ) -> QueryResults:
         """Retrieve documents from the collection of the vector database based on the queries.
         Note: Distance threshold is not supported in Couchbase FTS.
         """
 
-        results: QueryResults = []
+        results: QueryResults = []  # type: ignore[no-any-unimported]
         for query_text in queries:
-            query_vector = np.array(self.embedding_function([query_text])).tolist()[0]
+            # todo: fix typing
+            query_vector: list[float] = np.array(self.embedding_function([query_text])).tolist()[0]  # type: ignore[assignment]
             query_result = self._vector_search(
                 query_vector,
                 n_results,
                 **kwargs,
             )
-            results.append(query_result)
+            # todo: fix typing
+            results.append(query_result)  # type: ignore[arg-type]
         return results
 
-    def _vector_search(self, embedding_vector: List[float], n_results: int = 10, **kwargs) -> List[Tuple[Dict, float]]:
+    def _vector_search(
+        self, embedding_vector: list[float], n_results: int = 10, **kwargs: Any
+    ) -> list[tuple[dict[str, str], float]]:
         """Core vector search using Couchbase FTS."""
 
         search_req = search.SearchRequest.create(

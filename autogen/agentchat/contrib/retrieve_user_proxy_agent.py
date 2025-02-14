@@ -23,8 +23,11 @@ from ...retrieve_utils import (
 from ...token_count_utils import count_token
 from .. import UserProxyAgent
 from ..agent import Agent
-from ..contrib.vectordb.base import Document, QueryResults, VectorDB, VectorDBFactory
-from ..contrib.vectordb.utils import (
+from ..contrib.vectordb import (
+    Document,
+    QueryResults,
+    VectorDB,
+    VectorDBFactory,
     chroma_results_to_query_results,
     filter_results_by_distance,
     get_logger,

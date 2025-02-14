@@ -9,7 +9,7 @@ from typing import Optional, Union
 from ... import OpenAIWrapper
 from ...import_utils import optional_import_block, require_optional_import
 from .. import Agent, ConversableAgent
-from .vectordb.utils import get_logger
+from .vectordb import get_logger
 
 logger = get_logger(__name__)
 

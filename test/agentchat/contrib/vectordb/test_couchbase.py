@@ -8,6 +8,7 @@ import os
 import random
 from datetime import timedelta
 from time import sleep
+from typing import Generator
 
 import pytest
 from dotenv import load_dotenv
@@ -46,7 +47,11 @@ DELAY = 2
 TIMEOUT = 120.0
 
 
-def _empty_collections_and_delete_indexes(cluster: Cluster, bucket_name, scope_name, collections=None):
+def _empty_collections_and_delete_indexes(  # type: ignore[no-any-unimported]
+    cluster: "Cluster",
+    bucket_name: str,
+    scope_name: str,
+) -> None:
     bucket = cluster.bucket(bucket_name)
     try:
         scope_manager = bucket.collections().get_all_scopes()
@@ -65,7 +70,7 @@ def _empty_collections_and_delete_indexes(cluster: Cluster, bucket_name, scope_n
 
 
 @pytest.fixture
-def db():
+def db() -> Generator[CouchbaseVectorDB, None, None]:
     cluster = Cluster.connect(
         COUCHBASE_HOST, ClusterOptions(PasswordAuthenticator(COUCHBASE_USERNAME, COUCHBASE_PASSWORD))
     )
@@ -88,7 +93,7 @@ _COLLECTION_NAMING_CACHE = []
 
 
 @pytest.fixture
-def collection_name():
+def collection_name() -> str:
     collection_id = random.randint(0, 100)
     while collection_id in _COLLECTION_NAMING_CACHE:
         collection_id = random.randint(0, 100)
@@ -97,7 +102,7 @@ def collection_name():
 
 
 @skip_on_missing_imports(["couchbase"], "retrievechat-couchbase")
-def test_couchbase(db, collection_name):
+def test_couchbase(db: CouchbaseVectorDB, collection_name: str) -> None:
     # db = CouchbaseVectorDB(path=".db")
     with pytest.raises(Exception):
         curr_col = db.get_collection(collection_name)
@@ -129,7 +134,8 @@ def test_couchbase(db, collection_name):
 
     # test_insert_docs
     docs = [{"content": "doc1", "id": "1"}, {"content": "doc2", "id": "2"}, {"content": "doc3", "id": "3"}]
-    db.insert_docs(docs, collection_name, upsert=False)
+    # todo: fix typing
+    db.insert_docs(docs, collection_name, upsert=False)  # type: ignore[arg-type]
     res = db.get_collection(collection_name).get_multi(["1", "2"]).results
 
     assert res["1"].value["content"] == "doc1"
@@ -137,14 +143,16 @@ def test_couchbase(db, collection_name):
 
     # test_update_docs
     docs = [{"content": "doc11", "id": "1"}, {"content": "doc2", "id": "2"}, {"content": "doc3", "id": "3"}]
-    db.update_docs(docs, collection_name)
+    # todo: fix typing
+    db.update_docs(docs, collection_name)  # type: ignore[arg-type]
     res = db.get_collection(collection_name).get_multi(["1", "2"]).results
     assert res["1"].value["content"] == "doc11"
     assert res["2"].value["content"] == "doc2"
 
     # test_delete_docs
     ids = ["1"]
-    db.delete_docs(ids, collection_name)
+    # todo: fix typing
+    db.delete_docs(ids, collection_name)  # type: ignore[arg-type]
     with pytest.raises(Exception):
         res = db.get_collection(collection_name).get(ids[0])
 
@@ -159,4 +167,4 @@ def test_couchbase(db, collection_name):
 
 
 if __name__ == "__main__":
-    test_couchbase(db(), collection_name())
+    test_couchbase(next(db()), collection_name())

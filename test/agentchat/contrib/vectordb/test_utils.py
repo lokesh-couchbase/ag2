@@ -10,20 +10,22 @@
 from autogen.agentchat.contrib.vectordb.utils import chroma_results_to_query_results, filter_results_by_distance
 
 
-def test_retrieve_config():
+def test_retrieve_config() -> None:
     results = [
         [("id1", 1), ("id2", 2)],
         [("id3", 2), ("id4", 3)],
     ]
-    print(filter_results_by_distance(results, 2.1))
+    # todo: fix typing
+    print(filter_results_by_distance(results, 2.1))  # type: ignore[arg-type]
     filter_results = [
         [("id1", 1), ("id2", 2)],
         [("id3", 2)],
     ]
-    assert filter_results == filter_results_by_distance(results, 2.1)
+    # todo: fix typing
+    assert filter_results == filter_results_by_distance(results, 2.1)  # type: ignore[arg-type]
 
 
-def test_chroma_results_to_query_results():
+def test_chroma_results_to_query_results() -> None:
     data_dict = {
         "key1s": [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
         "key2s": [["a", "b", "c"], ["c", "d", "e"], ["e", "f", "g"]],
@@ -48,4 +50,5 @@ def test_chroma_results_to_query_results():
             ({"key1": 9, "key2": "g", "key4": "6"}, 0.9),
         ],
     ]
-    assert chroma_results_to_query_results(data_dict) == results
+    # todo: fix typing
+    assert chroma_results_to_query_results(data_dict) == results  # type: ignore[arg-type]

@@ -2,4 +2,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-__all__: list[str] = []
+from .base import Document, QueryResults, VectorDB, VectorDBFactory
+from .utils import (
+    chroma_results_to_query_results,
+    filter_results_by_distance,
+    get_logger,
+)
+
+__all__ = [
+    "Document",
+    "QueryResults",
+    "VectorDB",
+    "VectorDBFactory",
+    "chroma_results_to_query_results",
+    "filter_results_by_distance",
+    "get_logger",
+]

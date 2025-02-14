@@ -13,7 +13,7 @@ from time import monotonic, sleep
 
 import pytest
 
-from autogen.agentchat.contrib.vectordb.base import Document
+from autogen.agentchat.contrib.vectordb import Document
 from autogen.agentchat.contrib.vectordb.mongodb import MongoDBAtlasVectorDB
 from autogen.import_utils import optional_import_block, skip_on_missing_imports
 

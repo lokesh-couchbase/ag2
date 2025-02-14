@@ -15,11 +15,14 @@ from typing import (
     runtime_checkable,
 )
 
+from ....doc_utils import export_module
+
 Metadata = Union[Mapping[str, Any], None]
 Vector = Union[Sequence[float], Sequence[int]]
 ItemID = Union[str, int]  # chromadb doesn't support int ids, VikingDB does
 
 
+@export_module("agentchat.contrib.vectordb")
 class Document(TypedDict):
     """A Document is a record in the vector database.
 
@@ -42,6 +45,7 @@ The response is a list of query results, each query result is a list of tuples c
 QueryResults = list[list[tuple[Document, float]]]
 
 
+@export_module("agentchat.contrib.vectordb")
 @runtime_checkable
 class VectorDB(Protocol):
     """Abstract class for vector database. A vector database is responsible for storing and retrieving documents.
@@ -63,9 +67,7 @@ class VectorDB(Protocol):
 
     active_collection: Any = None
     type: str = ""
-    embedding_function: Optional[Callable[[list[str]], list[list[float]]]] = (
-        None  # embeddings = embedding_function(sentences)
-    )
+    embedding_function: Optional[Callable[[list[str]], list[list[float]]]] = None
 
     def create_collection(self, collection_name: str, overwrite: bool = False, get_or_create: bool = True) -> Any:
         """Create a collection in the vector database.
@@ -190,6 +192,7 @@ class VectorDB(Protocol):
         ...
 
 
+@export_module("agentchat.contrib.vectordb")
 class VectorDBFactory:
     """Factory class for creating vector databases."""
 

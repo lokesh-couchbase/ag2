@@ -10,7 +10,7 @@ from typing import Callable, Literal, Optional
 from ...import_utils import optional_import_block, require_optional_import
 from ...retrieve_utils import TEXT_FORMATS, get_files_from_dir, split_files_to_chunks
 from ..contrib.retrieve_user_proxy_agent import RetrieveUserProxyAgent
-from ..contrib.vectordb.utils import (
+from ..contrib.vectordb import (
     chroma_results_to_query_results,
     filter_results_by_distance,
     get_logger,
