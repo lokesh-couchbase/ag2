@@ -9,6 +9,7 @@ node_modules/
 
 # Python virtualenv
 .venv*
+.env*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -174,7 +175,7 @@ test/test_files/agenteval-in-out/out/
 
 # local cache or coding foler
 local_cache/
-coding/
+# coding/
 
 # Files created by tests
 *tmp_code_*

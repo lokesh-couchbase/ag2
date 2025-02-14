@@ -1,39 +1,39 @@
-# Copyright (c) 2023 - 2024, Owners of https://github.com/ag2ai
+# Copyright (c) 2023 - 2025, AG2ai, Inc., AG2ai open-source projects maintainers and core contributors
 #
 # SPDX-License-Identifier: Apache-2.0
 
 import os
 import warnings
-from typing import List
+from typing import Optional
 
-from falkordb import FalkorDB, Graph
-from graphrag_sdk import KnowledgeGraph, Source
-from graphrag_sdk.model_config import KnowledgeGraphModelConfig
-from graphrag_sdk.models import GenerativeModel
-from graphrag_sdk.models.openai import OpenAiGenerativeModel
-from graphrag_sdk.ontology import Ontology
-
+from ....import_utils import optional_import_block, require_optional_import
 from .document import Document
 from .graph_query_engine import GraphStoreQueryResult
 
+with optional_import_block():
+    from falkordb import FalkorDB, Graph
+    from graphrag_sdk import KnowledgeGraph, Source
+    from graphrag_sdk.model_config import KnowledgeGraphModelConfig
+    from graphrag_sdk.models import GenerativeModel
+    from graphrag_sdk.models.openai import OpenAiGenerativeModel
+    from graphrag_sdk.ontology import Ontology
 
+
+@require_optional_import(["falkordb", "graphrag_sdk"], "graph-rag-falkor-db")
 class FalkorGraphQueryEngine:
-    """
-    This is a wrapper for FalkorDB KnowledgeGraph.
-    """
+    """This is a wrapper for FalkorDB KnowledgeGraph."""
 
     def __init__(
         self,
         name: str,
         host: str = "127.0.0.1",
         port: int = 6379,
-        username: str | None = None,
-        password: str | None = None,
-        model: GenerativeModel = OpenAiGenerativeModel("gpt-4o"),
-        ontology: Ontology | None = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        model: Optional["GenerativeModel"] = None,
+        ontology: Optional["Ontology"] = None,
     ):
-        """
-        Initialize a FalkorDB knowledge graph.
+        """Initialize a FalkorDB knowledge graph.
         Please also refer to https://github.com/FalkorDB/GraphRAG-SDK/blob/main/graphrag_sdk/kg.py
 
         TODO: Fix LLM API cost calculation for FalkorDB useages.
@@ -49,23 +49,22 @@ class FalkorGraphQueryEngine:
                 If None, FalkorDB will auto generate an ontology from the input docs.
         """
         self.name = name
+        self.ontology_table_name = name + "_ontology"
         self.host = host
         self.port = port
         self.username = username
         self.password = password
-        self.model = model
+        self.model = model or OpenAiGenerativeModel("gpt-4o")
         self.model_config = KnowledgeGraphModelConfig.with_model(model)
         self.ontology = ontology
         self.knowledge_graph = None
         self.falkordb = FalkorDB(host=self.host, port=self.port, username=self.username, password=self.password)
 
     def connect_db(self):
-        """
-        Connect to an existing knowledge graph.
-        """
+        """Connect to an existing knowledge graph."""
         if self.name in self.falkordb.list_graphs():
             try:
-                self.ontology = self._load_ontology_from_db(self.name)
+                self.ontology = self._load_ontology_from_db()
             except Exception:
                 warnings.warn("Graph Ontology is not loaded.")
 
@@ -87,10 +86,8 @@ class FalkorGraphQueryEngine:
         else:
             raise ValueError(f"Knowledge graph '{self.name}' does not exist")
 
-    def init_db(self, input_doc: List[Document]):
-        """
-        Build the knowledge graph with input documents.
-        """
+    def init_db(self, input_doc: list[Document]):
+        """Build the knowledge graph with input documents."""
         sources = []
         for doc in input_doc:
             if os.path.exists(doc.path_or_url):
@@ -103,6 +100,8 @@ class FalkorGraphQueryEngine:
                     sources=sources,
                     model=self.model,
                 )
+            # Save Ontology to graph for future access.
+            self._save_ontology_to_db(self.ontology)
 
             self.knowledge_graph = KnowledgeGraph(
                 name=self.name,
@@ -118,18 +117,14 @@ class FalkorGraphQueryEngine:
 
             # Establishing a chat session will maintain the history
             self._chat_session = self.knowledge_graph.chat_session()
-
-            # Save Ontology to graph for future access.
-            self._save_ontology_to_db(self.name, self.ontology)
         else:
             raise ValueError("No input documents could be loaded.")
 
-    def add_records(self, new_records: List) -> bool:
+    def add_records(self, new_records: list[Document]) -> bool:
         raise NotImplementedError("This method is not supported by FalkorDB SDK yet.")
 
     def query(self, question: str, n_results: int = 1, **kwargs) -> GraphStoreQueryResult:
-        """
-        Query the knowledge graph with a question and optional message history.
+        """Query the knowledge graph with a question and optional message history.
 
         Args:
         question: a human input question.
@@ -149,17 +144,27 @@ class FalkorGraphQueryEngine:
 
         return GraphStoreQueryResult(answer=response["response"], results=[])
 
-    def __get_ontology_storage_graph(self, graph_name: str) -> Graph:
-        ontology_table_name = graph_name + "_ontology"
-        return self.falkordb.select_graph(ontology_table_name)
+    def delete(self) -> bool:
+        """Delete graph and its data from database."""
+        all_graphs = self.falkordb.list_graphs()
+        if self.name in all_graphs:
+            self.falkordb.select_graph(self.name).delete()
+        if self.ontology_table_name in all_graphs:
+            self.falkordb.select_graph(self.ontology_table_name).delete()
+        return True
 
-    def _save_ontology_to_db(self, graph_name: str, ontology: Ontology):
-        """
-        Save graph ontology to a separate table with {graph_name}_ontology
-        """
-        graph = self.__get_ontology_storage_graph(graph_name)
+    def __get_ontology_storage_graph(self) -> "Graph":
+        return self.falkordb.select_graph(self.ontology_table_name)
+
+    def _save_ontology_to_db(self, ontology: "Ontology"):
+        """Save graph ontology to a separate table with {graph_name}_ontology"""
+        if self.ontology_table_name in self.falkordb.list_graphs():
+            raise ValueError(f"Knowledge graph {self.name} is already created.")
+        graph = self.__get_ontology_storage_graph()
         ontology.save_to_graph(graph)
 
-    def _load_ontology_from_db(self, graph_name: str) -> Ontology:
-        graph = self.__get_ontology_storage_graph(graph_name)
+    def _load_ontology_from_db(self) -> "Ontology":
+        if self.ontology_table_name not in self.falkordb.list_graphs():
+            raise ValueError(f"Knowledge graph {self.name} has not been created.")
+        graph = self.__get_ontology_storage_graph()
         return Ontology.from_graph(graph)

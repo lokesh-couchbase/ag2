@@ -1,36 +1,39 @@
-# Copyright (c) 2023 - 2024, Owners of https://github.com/ag2ai
+# Copyright (c) 2023 - 2025, AG2ai, Inc., AG2ai open-source projects maintainers and core contributors
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Portions derived from  https://github.com/microsoft/autogen are under the MIT License.
+# Portions derived from https://github.com/microsoft/autogen are under the MIT License.
 # SPDX-License-Identifier: MIT
 """Create a OpenAI-compatible client for Gemini features.
 
-
 Example:
-    llm_config={
-        "config_list": [{
-            "api_type": "google",
-            "model": "gemini-pro",
-            "api_key": os.environ.get("GOOGLE_GEMINI_API_KEY"),
-            "safety_settings": [
+    ```python
+    llm_config = {
+        "config_list": [
+            {
+                "api_type": "google",
+                "model": "gemini-pro",
+                "api_key": os.environ.get("GOOGLE_GEMINI_API_KEY"),
+                "safety_settings": [
                     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
                     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
                     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
-                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"}
-                    ],
-            "top_p":0.5,
-            "max_tokens": 2048,
-            "temperature": 1.0,
-            "top_k": 5
+                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
+                ],
+                "top_p": 0.5,
+                "max_tokens": 2048,
+                "temperature": 1.0,
+                "top_k": 5,
             }
-    ]}
+        ]
+    }
 
     agent = autogen.AssistantAgent("my_agent", llm_config=llm_config)
+    ```
 
 Resources:
 - https://ai.google.dev/docs
-- https://cloud.google.com/vertex-ai/docs/generative-ai/migrate-from-azure
+- https://cloud.google.com/vertex-ai/generative-ai/docs/migrate/migrate-from-azure-to-gemini
 - https://blog.google/technology/ai/google-gemini-pro-imagen-duet-ai-update/
 - https://ai.google.dev/api/python/google/generativeai/ChatSession
 """
@@ -38,6 +41,8 @@ Resources:
 from __future__ import annotations
 
 import base64
+import copy
+import json
 import logging
 import os
 import random
@@ -45,34 +50,56 @@ import re
 import time
 import warnings
 from io import BytesIO
-from typing import Any, Dict, List, Mapping, Optional, Union
+from typing import Any, Optional, Type
 
-import google.generativeai as genai
 import requests
-import vertexai
-from google.ai.generativelanguage import Content, Part
-from google.auth.credentials import Credentials
-from openai.types.chat import ChatCompletion
+from openai.types.chat import ChatCompletion, ChatCompletionMessageToolCall
 from openai.types.chat.chat_completion import ChatCompletionMessage, Choice
 from openai.types.completion_usage import CompletionUsage
-from PIL import Image
 from pydantic import BaseModel
-from vertexai.generative_models import Content as VertexAIContent
-from vertexai.generative_models import GenerativeModel
-from vertexai.generative_models import HarmBlockThreshold as VertexAIHarmBlockThreshold
-from vertexai.generative_models import HarmCategory as VertexAIHarmCategory
-from vertexai.generative_models import Part as VertexAIPart
-from vertexai.generative_models import SafetySetting as VertexAISafetySetting
+
+from ..import_utils import optional_import_block, require_optional_import
+from .client_utils import FormatterProtocol
+
+with optional_import_block():
+    import google.genai as genai
+    import jsonref
+    import vertexai
+    from PIL import Image
+    from google.auth.credentials import Credentials
+    from google.genai.types import (
+        Content,
+        FunctionCall,
+        FunctionDeclaration,
+        FunctionResponse,
+        GenerateContentConfig,
+        GenerateContentResponse,
+        Part,
+        Schema,
+        Tool,
+        Type,
+    )
+    from jsonschema import ValidationError
+    from vertexai.generative_models import Content as VertexAIContent
+    from vertexai.generative_models import FunctionDeclaration as vaiFunctionDeclaration
+    from vertexai.generative_models import GenerationConfig, GenerativeModel
+    from vertexai.generative_models import (
+        GenerationResponse as VertexAIGenerationResponse,
+    )
+    from vertexai.generative_models import HarmBlockThreshold as VertexAIHarmBlockThreshold
+    from vertexai.generative_models import HarmCategory as VertexAIHarmCategory
+    from vertexai.generative_models import Part as VertexAIPart
+    from vertexai.generative_models import SafetySetting as VertexAISafetySetting
+    from vertexai.generative_models import (
+        Tool as vaiTool,
+    )
 
 logger = logging.getLogger(__name__)
 
 
+@require_optional_import(["google", "vertexai", "PIL", "jsonschema", "jsonref"], "gemini")
 class GeminiClient:
-    """Client for Google's Gemini API.
-
-    Please visit this [page](https://github.com/microsoft/autogen/issues/2387) for the roadmap of Gemini integration
-    of AutoGen.
-    """
+    """Client for Google's Gemini API."""
 
     # Mapping, where Key is a term used by Autogen, and Value is a term used by Gemini
     PARAMS_MAPPING = {
@@ -95,9 +122,9 @@ class GeminiClient:
         if "location" in params:
             vertexai_init_args["location"] = params["location"]
         if "credentials" in params:
-            assert isinstance(
-                params["credentials"], Credentials
-            ), "Object type google.auth.credentials.Credentials is expected!"
+            assert isinstance(params["credentials"], Credentials), (
+                "Object type google.auth.credentials.Credentials is expected!"
+            )
             vertexai_init_args["credentials"] = params["credentials"]
         if vertexai_init_args:
             vertexai.init(**vertexai_init_args)
@@ -121,7 +148,7 @@ class GeminiClient:
             location (str): Compute region to be used, like 'us-west1'.
                 This parameter is only valid in case no API key is specified.
         """
-        self.api_key = kwargs.get("api_key", None)
+        self.api_key = kwargs.get("api_key")
         if not self.api_key:
             self.api_key = os.getenv("GOOGLE_GEMINI_API_KEY")
             if self.api_key is None:
@@ -132,16 +159,17 @@ class GeminiClient:
         else:
             self.use_vertexai = False
         if not self.use_vertexai:
-            assert ("project_id" not in kwargs) and (
-                "location" not in kwargs
-            ), "Google Cloud project and compute location cannot be set when using an API Key!"
+            assert ("project_id" not in kwargs) and ("location" not in kwargs), (
+                "Google Cloud project and compute location cannot be set when using an API Key!"
+            )
 
-        if "response_format" in kwargs and kwargs["response_format"] is not None:
-            warnings.warn("response_format is not supported for Gemini. It will be ignored.", UserWarning)
+        self.api_version = kwargs.get("api_version")
 
-    def message_retrieval(self, response) -> List:
-        """
-        Retrieve and return a list of strings or a list of Choice.Message from the response.
+        # Store the response format, if provided (for structured outputs)
+        self._response_format: Optional[Type[BaseModel]] = None
+
+    def message_retrieval(self, response) -> list:
+        """Retrieve and return a list of strings or a list of Choice.Message from the response.
 
         NOTE: if a list of Choice.Message is returned, it currently needs to contain the fields of OpenAI's ChatCompletion Message object,
         since that is expected for function or tool calling in the rest of the codebase at the moment, unless a custom agent is being used.
@@ -152,7 +180,7 @@ class GeminiClient:
         return response.cost
 
     @staticmethod
-    def get_usage(response) -> Dict:
+    def get_usage(response) -> dict:
         """Return usage summary of the response using RESPONSE_USAGE_KEYS."""
         # ...  # pragma: no cover
         return {
@@ -163,27 +191,34 @@ class GeminiClient:
             "model": response.model,
         }
 
-    def create(self, params: Dict) -> ChatCompletion:
+    def create(self, params: dict) -> ChatCompletion:
         if self.use_vertexai:
             self._initialize_vertexai(**params)
         else:
-            assert ("project_id" not in params) and (
-                "location" not in params
-            ), "Google Cloud project and compute location cannot be set when using an API Key!"
+            assert ("project_id" not in params) and ("location" not in params), (
+                "Google Cloud project and compute location cannot be set when using an API Key!"
+            )
         model_name = params.get("model", "gemini-pro")
-        if not model_name:
+
+        if model_name == "gemini-pro-vision":
+            raise ValueError(
+                "Gemini 1.0 Pro vision ('gemini-pro-vision') has been deprecated, please consider switching to a different model, for example 'gemini-1.5-flash'."
+            )
+        elif not model_name:
             raise ValueError(
                 "Please provide a model name for the Gemini Client. "
                 "You can configure it in the OAI Config List file. "
-                "See this [LLM configuration tutorial](https://ag2ai.github.io/ag2/docs/topics/llm_configuration/) for more details."
+                "See this [LLM configuration tutorial](https://docs.ag2.ai/docs/topics/llm_configuration/) for more details."
             )
 
         params.get("api_type", "google")  # not used
+        http_options = {"api_version": self.api_version} if self.api_version else None
         messages = params.get("messages", [])
         stream = params.get("stream", False)
         n_response = params.get("n", 1)
-        system_instruction = params.get("system_instruction", None)
+        system_instruction = params.get("system_instruction")
         response_validation = params.get("response_validation", True)
+        tools = self._tools_to_gemini_tools(params["tools"]) if "tools" in params else None
 
         generation_config = {
             gemini_term: params[autogen_term]
@@ -191,86 +226,133 @@ class GeminiClient:
             if autogen_term in params
         }
         if self.use_vertexai:
-            safety_settings = GeminiClient._to_vertexai_safety_settings(params.get("safety_settings", {}))
+            safety_settings = GeminiClient._to_vertexai_safety_settings(params.get("safety_settings", []))
         else:
-            safety_settings = params.get("safety_settings", {})
+            safety_settings = params.get("safety_settings", [])
 
         if stream:
             warnings.warn(
                 "Streaming is not supported for Gemini yet, and it will have no effect. Please set stream=False.",
                 UserWarning,
             )
+            stream = False
 
         if n_response > 1:
             warnings.warn("Gemini only supports `n=1` for now. We only generate one response.", UserWarning)
 
-        if "vision" not in model_name:
-            # A. create and call the chat model.
-            gemini_messages = self._oai_messages_to_gemini_messages(messages)
-            if self.use_vertexai:
-                model = GenerativeModel(
-                    model_name,
-                    generation_config=generation_config,
-                    safety_settings=safety_settings,
-                    system_instruction=system_instruction,
-                )
-                chat = model.start_chat(history=gemini_messages[:-1], response_validation=response_validation)
-            else:
-                # we use chat model by default
-                model = genai.GenerativeModel(
-                    model_name,
-                    generation_config=generation_config,
-                    safety_settings=safety_settings,
-                    system_instruction=system_instruction,
-                )
-                genai.configure(api_key=self.api_key)
-                chat = model.start_chat(history=gemini_messages[:-1])
+        autogen_tool_calls = []
 
+        # Maps the function call ids to function names so we can inject it into FunctionResponse messages
+        self.tool_call_function_map: dict[str, str] = {}
+
+        # If response_format exists, we want structured outputs
+        # Based on
+        # https://ai.google.dev/gemini-api/docs/structured-output?lang=python#supply-schema-in-config
+        if params.get("response_format"):
+            self._response_format = params.get("response_format")
+            generation_config["response_mime_type"] = "application/json"
+
+            response_schema = dict(jsonref.replace_refs(params.get("response_format").model_json_schema()))
+            if "$defs" in response_schema:
+                response_schema.pop("$defs")
+            generation_config["response_schema"] = response_schema
+
+        # A. create and call the chat model.
+        gemini_messages = self._oai_messages_to_gemini_messages(messages)
+        if self.use_vertexai:
+            model = GenerativeModel(
+                model_name,
+                generation_config=GenerationConfig(**generation_config),
+                safety_settings=safety_settings,
+                system_instruction=system_instruction,
+                tools=tools,
+            )
+
+            chat = model.start_chat(history=gemini_messages[:-1], response_validation=response_validation)
             response = chat.send_message(gemini_messages[-1].parts, stream=stream, safety_settings=safety_settings)
-            ans: str = chat.history[-1].parts[0].text
-            prompt_tokens = model.count_tokens(chat.history[:-1]).total_tokens
-            completion_tokens = model.count_tokens(ans).total_tokens
-        elif model_name == "gemini-pro-vision":
-            # B. handle the vision model
-            if self.use_vertexai:
-                model = GenerativeModel(
-                    model_name,
-                    generation_config=generation_config,
-                    safety_settings=safety_settings,
-                    system_instruction=system_instruction,
-                )
-            else:
-                model = genai.GenerativeModel(
-                    model_name,
-                    generation_config=generation_config,
-                    safety_settings=safety_settings,
-                    system_instruction=system_instruction,
-                )
-                genai.configure(api_key=self.api_key)
-            # Gemini's vision model does not support chat history yet
-            # chat = model.start_chat(history=gemini_messages[:-1])
-            # response = chat.send_message(gemini_messages[-1].parts)
-            user_message = self._oai_content_to_gemini_content(messages[-1]["content"])
-            if len(messages) > 2:
-                warnings.warn(
-                    "Warning: Gemini's vision model does not support chat history yet.",
-                    "We only use the last message as the prompt.",
-                    UserWarning,
-                )
+        else:
+            client = genai.Client(api_key=self.api_key, http_options=http_options)
+            generate_content_config = GenerateContentConfig(
+                safety_settings=safety_settings,
+                system_instruction=system_instruction,
+                tools=tools,
+                **generation_config,
+            )
+            chat = client.chats.create(model=model_name, config=generate_content_config, history=gemini_messages[:-1])
+            response = chat.send_message(message=gemini_messages[-1].parts)
 
-            response = model.generate_content(user_message, stream=stream)
-            # ans = response.text
-            if self.use_vertexai:
-                ans: str = response.candidates[0].content.parts[0].text
-            else:
-                ans: str = response._result.candidates[0].content.parts[0].text
+        # Extract text and tools from response
+        ans = ""
+        random_id = random.randint(0, 10000)
+        prev_function_calls = []
 
-            prompt_tokens = model.count_tokens(user_message).total_tokens
-            completion_tokens = model.count_tokens(ans).total_tokens
+        if isinstance(response, GenerateContentResponse):
+            if len(response.candidates) != 1:
+                raise ValueError(
+                    f"Unexpected number of candidates in the response. Expected 1, got {len(response.candidates)}"
+                )
+            parts = response.candidates[0].content.parts
+        elif isinstance(response, VertexAIGenerationResponse):  # or hasattr(response, "candidates"):
+            # google.generativeai also raises an error len(candidates) != 1:
+            if len(response.candidates) != 1:
+                raise ValueError(
+                    f"Unexpected number of candidates in the response. Expected 1, got {len(response.candidates)}"
+                )
+            parts = response.candidates[0].content.parts
+        else:
+            raise ValueError(f"Unexpected response type: {type(response)}")
+
+        for part in parts:
+            # Function calls
+            if fn_call := part.function_call:
+                # If we have a repeated function call, ignore it
+                if fn_call not in prev_function_calls:
+                    autogen_tool_calls.append(
+                        ChatCompletionMessageToolCall(
+                            id=str(random_id),
+                            function={
+                                "name": fn_call.name,
+                                "arguments": (
+                                    json.dumps({key: val for key, val in fn_call.args.items()})
+                                    if fn_call.args is not None
+                                    else ""
+                                ),
+                            },
+                            type="function",
+                        )
+                    )
+
+                    prev_function_calls.append(fn_call)
+                    random_id += 1
+
+            # Plain text content
+            elif text := part.text:
+                ans += text
+
+        # If we have function calls, ignore the text
+        # as it can be Gemini guessing the function response
+        if len(autogen_tool_calls) != 0:
+            ans = ""
+        else:
+            autogen_tool_calls = None
+
+        if self._response_format and ans:
+            try:
+                parsed_response = self._convert_json_response(ans)
+                ans = _format_json_response(parsed_response, ans)
+            except ValueError as e:
+                ans = str(e)
 
         # 3. convert output
-        message = ChatCompletionMessage(role="assistant", content=ans, function_call=None, tool_calls=None)
-        choices = [Choice(finish_reason="stop", index=0, message=message)]
+        message = ChatCompletionMessage(
+            role="assistant", content=ans, function_call=None, tool_calls=autogen_tool_calls
+        )
+        choices = [
+            Choice(finish_reason="tool_calls" if autogen_tool_calls is not None else "stop", index=0, message=message)
+        ]
+
+        prompt_tokens = response.usage_metadata.prompt_token_count
+        completion_tokens = response.usage_metadata.candidates_token_count
 
         response_oai = ChatCompletion(
             id=str(random.randint(0, 1000)),
@@ -283,52 +365,104 @@ class GeminiClient:
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
             ),
-            cost=calculate_gemini_cost(prompt_tokens, completion_tokens, model_name),
+            cost=calculate_gemini_cost(self.use_vertexai, prompt_tokens, completion_tokens, model_name),
         )
 
         return response_oai
 
-    def _oai_content_to_gemini_content(self, content: Union[str, List]) -> List:
-        """Convert content from OAI format to Gemini format"""
+    def _oai_content_to_gemini_content(self, message: dict[str, Any]) -> tuple[list, str]:
+        """Convert AutoGen content to Gemini parts, catering for text and tool calls"""
         rst = []
-        if isinstance(content, str):
+
+        if "role" in message and message["role"] == "tool":
+            # Tool call recommendation
+
+            function_name = self.tool_call_function_map[message["tool_call_id"]]
+
+            if self.use_vertexai:
+                rst.append(
+                    VertexAIPart.from_function_response(
+                        name=function_name, response={"result": self._to_json_or_str(message["content"])}
+                    )
+                )
+            else:
+                rst.append(
+                    Part(
+                        function_response=FunctionResponse(
+                            name=function_name, response={"result": self._to_json_or_str(message["content"])}
+                        )
+                    )
+                )
+
+            return rst, "tool"
+        elif "tool_calls" in message and len(message["tool_calls"]) != 0:
+            for tool_call in message["tool_calls"]:
+                function_id = tool_call["id"]
+                function_name = tool_call["function"]["name"]
+                self.tool_call_function_map[function_id] = function_name
+
+                if self.use_vertexai:
+                    rst.append(
+                        VertexAIPart.from_dict({
+                            "functionCall": {
+                                "name": function_name,
+                                "args": json.loads(tool_call["function"]["arguments"]),
+                            }
+                        })
+                    )
+                else:
+                    rst.append(
+                        Part(
+                            function_call=FunctionCall(
+                                name=function_name,
+                                args=json.loads(tool_call["function"]["arguments"]),
+                            )
+                        )
+                    )
+
+            return rst, "tool_call"
+
+        elif isinstance(message["content"], str):
+            content = message["content"]
             if content == "":
                 content = "empty"  # Empty content is not allowed.
             if self.use_vertexai:
                 rst.append(VertexAIPart.from_text(content))
             else:
                 rst.append(Part(text=content))
-            return rst
 
-        assert isinstance(content, list)
+            return rst, "text"
 
-        for msg in content:
-            if isinstance(msg, dict):
-                assert "type" in msg, f"Missing 'type' field in message: {msg}"
-                if msg["type"] == "text":
-                    if self.use_vertexai:
-                        rst.append(VertexAIPart.from_text(text=msg["text"]))
+        # For images the message contains a list of text items
+        if isinstance(message["content"], list):
+            has_image = False
+            for msg in message["content"]:
+                if isinstance(msg, dict):
+                    assert "type" in msg, f"Missing 'type' field in message: {msg}"
+                    if msg["type"] == "text":
+                        if self.use_vertexai:
+                            rst.append(VertexAIPart.from_text(text=msg["text"]))
+                        else:
+                            rst.append(Part(text=msg["text"]))
+                    elif msg["type"] == "image_url":
+                        if self.use_vertexai:
+                            img_url = msg["image_url"]["url"]
+                            img_part = VertexAIPart.from_uri(img_url, mime_type="image/png")
+                            rst.append(img_part)
+                        else:
+                            b64_img = get_image_data(msg["image_url"]["url"])
+                            rst.append(Part(inline_data={"mime_type": "image/png", "data": b64_img}))
+
+                        has_image = True
                     else:
-                        rst.append(Part(text=msg["text"]))
-                elif msg["type"] == "image_url":
-                    if self.use_vertexai:
-                        img_url = msg["image_url"]["url"]
-                        re.match(r"data:image/(?:png|jpeg);base64,", img_url)
-                        img = get_image_data(img_url, use_b64=False)
-                        # image/png works with jpeg as well
-                        img_part = VertexAIPart.from_data(img, mime_type="image/png")
-                        rst.append(img_part)
-                    else:
-                        b64_img = get_image_data(msg["image_url"]["url"])
-                        img = _to_pil(b64_img)
-                        rst.append(img)
+                        raise ValueError(f"Unsupported message type: {msg['type']}")
                 else:
-                    raise ValueError(f"Unsupported message type: {msg['type']}")
-            else:
-                raise ValueError(f"Unsupported message type: {type(msg)}")
-        return rst
+                    raise ValueError(f"Unsupported message type: {type(msg)}")
+            return rst, "image" if has_image else "text"
+        else:
+            raise Exception("Unable to convert content to Gemini format.")
 
-    def _concat_parts(self, parts: List[Part]) -> List:
+    def _concat_parts(self, parts: list[Part]) -> list:
         """Concatenate parts with the same type.
         If two adjacent parts both have the "text" attribute, then it will be joined into one part.
         """
@@ -357,56 +491,225 @@ class GeminiClient:
 
         return concatenated_parts
 
-    def _oai_messages_to_gemini_messages(self, messages: list[Dict[str, Any]]) -> list[dict[str, Any]]:
+    def _oai_messages_to_gemini_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Convert messages from OAI format to Gemini format.
         Make sure the "user" role and "model" role are interleaved.
         Also, make sure the last item is from the "user" role.
         """
-        prev_role = None
         rst = []
-        curr_parts = []
-        for i, message in enumerate(messages):
-            parts = self._oai_content_to_gemini_content(message["content"])
+        for message in messages:
+            parts, part_type = self._oai_content_to_gemini_content(message)
             role = "user" if message["role"] in ["user", "system"] else "model"
-            if (prev_role is None) or (role == prev_role):
-                curr_parts += parts
-            elif role != prev_role:
-                if self.use_vertexai:
-                    rst.append(VertexAIContent(parts=curr_parts, role=prev_role))
-                else:
-                    rst.append(Content(parts=curr_parts, role=prev_role))
-                curr_parts = parts
-            prev_role = role
 
-        # handle the last message
-        if self.use_vertexai:
-            rst.append(VertexAIContent(parts=curr_parts, role=role))
-        else:
-            rst.append(Content(parts=curr_parts, role=role))
+            if part_type == "text":
+                rst.append(
+                    VertexAIContent(parts=parts, role=role)
+                    if self.use_vertexai
+                    else rst.append(Content(parts=parts, role=role))
+                )
+            elif part_type == "tool" or part_type == "tool_call":
+                rst.append(
+                    VertexAIContent(parts=parts, role="function")
+                    if self.use_vertexai
+                    else rst.append(Content(parts=parts, role="function"))
+                )
+            elif part_type == "image":
+                # Image has multiple parts, some can be text and some can be image based
+                text_parts = []
+                image_parts = []
+                for part in parts:
+                    if isinstance(part, Part):
+                        # Text or non-Vertex AI image part
+                        text_parts.append(part)
+                    elif isinstance(part, VertexAIPart):
+                        # Image
+                        image_parts.append(part)
+                    else:
+                        raise Exception("Unable to process image part")
+
+                if len(text_parts) > 0:
+                    rst.append(
+                        VertexAIContent(parts=text_parts, role=role)
+                        if self.use_vertexai
+                        else rst.append(Content(parts=text_parts, role=role))
+                    )
+
+                if len(image_parts) > 0:
+                    rst.append(
+                        VertexAIContent(parts=image_parts, role=role)
+                        if self.use_vertexai
+                        else rst.append(Content(parts=image_parts, role=role))
+                    )
+
+            if len(rst) != 0 and rst[-1] is None:
+                rst.pop()
 
         # The Gemini is restrict on order of roles, such that
         # 1. The messages should be interleaved between user and model.
         # 2. The last message must be from the user role.
         # We add a dummy message "continue" if the last role is not the user.
-        if rst[-1].role != "user":
-            if self.use_vertexai:
-                rst.append(VertexAIContent(parts=self._oai_content_to_gemini_content("continue"), role="user"))
-            else:
-                rst.append(Content(parts=self._oai_content_to_gemini_content("continue"), role="user"))
+        if rst[-1].role not in ["user", "function"]:
+            text_part, _ = self._oai_content_to_gemini_content({"content": "continue"})
+            rst.append(
+                VertexAIContent(parts=text_part, role="user")
+                if self.use_vertexai
+                else Content(parts=text_part, role="user")
+            )
 
         return rst
+
+    def _convert_json_response(self, response: str) -> Any:
+        """Extract and validate JSON response from the output for structured outputs.
+
+        Args:
+            response (str): The response from the API.
+
+        Returns:
+            Any: The parsed JSON response.
+        """
+        if not self._response_format:
+            return response
+
+        try:
+            # Parse JSON and validate against the Pydantic model
+            json_data = json.loads(response)
+            return self._response_format.model_validate(json_data)
+        except Exception as e:
+            raise ValueError(f"Failed to parse response as valid JSON matching the schema for Structured Output: {e!s}")
+
+    @staticmethod
+    def _convert_type_null_to_nullable(schema: Any) -> Any:
+        """
+        Recursively converts all occurrences of {"type": "null"} to {"nullable": True} in a schema.
+        """
+        if isinstance(schema, dict):
+            # If schema matches {"type": "null"}, replace it
+            if schema == {"type": "null"}:
+                return {"nullable": True}
+            # Otherwise, recursively process dictionary
+            return {key: GeminiClient._convert_type_null_to_nullable(value) for key, value in schema.items()}
+        elif isinstance(schema, list):
+            # Recursively process list elements
+            return [GeminiClient._convert_type_null_to_nullable(item) for item in schema]
+        return schema
+
+    def _tools_to_gemini_tools(self, tools: list[dict[str, Any]]) -> list[Tool]:
+        """Create Gemini tools (as typically requires Callables)"""
+        functions = []
+        for tool in tools:
+            if self.use_vertexai:
+                tool["function"]["parameters"] = GeminiClient._convert_type_null_to_nullable(
+                    tool["function"]["parameters"]
+                )
+                function = vaiFunctionDeclaration(
+                    name=tool["function"]["name"],
+                    description=tool["function"]["description"],
+                    parameters=tool["function"]["parameters"],
+                )
+            else:
+                function = GeminiClient._create_gemini_function_declaration(tool)
+            functions.append(function)
+
+        if self.use_vertexai:
+            return [vaiTool(function_declarations=functions)]
+        else:
+            return [Tool(function_declarations=functions)]
+
+    @staticmethod
+    def _create_gemini_function_declaration(tool: dict) -> FunctionDeclaration:
+        function_declaration = FunctionDeclaration()
+        function_declaration.name = tool["function"]["name"]
+        function_declaration.description = tool["function"]["description"]
+        if len(tool["function"]["parameters"]["properties"]) != 0:
+            function_declaration.parameters = GeminiClient._create_gemini_function_parameters(
+                copy.deepcopy(tool["function"]["parameters"])
+            )
+
+        return function_declaration
+
+    @staticmethod
+    def _create_gemini_function_declaration_schema(json_data) -> Schema:
+        """Recursively creates Schema objects for FunctionDeclaration."""
+        param_schema = Schema()
+        param_type = json_data["type"]
+
+        """
+        TYPE_UNSPECIFIED = 0
+        STRING = 1
+        INTEGER = 2
+        NUMBER = 3
+        OBJECT = 4
+        ARRAY = 5
+        BOOLEAN = 6
+        """
+
+        if param_type == "integer":
+            param_schema.type = Type.INTEGER
+        elif param_type == "number":
+            param_schema.type = Type.NUMBER
+        elif param_type == "string":
+            param_schema.type = Type.STRING
+        elif param_type == "boolean":
+            param_schema.type = Type.BOOLEAN
+        elif param_type == "array":
+            param_schema.type = Type.ARRAY
+            if "items" in json_data:
+                param_schema.items = GeminiClient._create_gemini_function_declaration_schema(json_data["items"])
+            else:
+                print("Warning: Array schema missing 'items' definition.")
+        elif param_type == "object":
+            param_schema.type = Type.OBJECT
+            param_schema.properties = {}
+            if "properties" in json_data:
+                for prop_name, prop_data in json_data["properties"].items():
+                    param_schema.properties[prop_name] = GeminiClient._create_gemini_function_declaration_schema(
+                        prop_data
+                    )
+                else:
+                    print("Warning: Object schema missing 'properties' definition.")
+
+        elif param_type in ("null", "any"):
+            param_schema.type = Type.STRING  # Treating these as strings for simplicity
+        else:
+            print(f"Warning: Unsupported parameter type '{param_type}'.")
+
+        if "description" in json_data:
+            param_schema.description = json_data["description"]
+
+        return param_schema
+
+    @staticmethod
+    def _create_gemini_function_parameters(function_parameter: dict[str, any]) -> dict[str, any]:
+        """Convert function parameters to Gemini format, recursive"""
+        if "type" in function_parameter:
+            function_parameter["type"] = function_parameter["type"].upper()
+
+        # Parameter properties and items
+        if "properties" in function_parameter:
+            for key in function_parameter["properties"]:
+                function_parameter["properties"][key] = GeminiClient._create_gemini_function_parameters(
+                    function_parameter["properties"][key]
+                )
+
+        if "items" in function_parameter:
+            function_parameter["items"] = GeminiClient._create_gemini_function_parameters(function_parameter["items"])
+
+        # Remove any attributes not needed
+        for attr in ["default"]:
+            if attr in function_parameter:
+                del function_parameter[attr]
+
+        return function_parameter
 
     @staticmethod
     def _to_vertexai_safety_settings(safety_settings):
         """Convert safety settings to VertexAI format if needed,
         like when specifying them in the OAI_CONFIG_LIST
         """
-        if isinstance(safety_settings, list) and all(
-            [
-                isinstance(safety_setting, dict) and not isinstance(safety_setting, VertexAISafetySetting)
-                for safety_setting in safety_settings
-            ]
-        ):
+        if isinstance(safety_settings, list) and all([
+            isinstance(safety_setting, dict) and not isinstance(safety_setting, VertexAISafetySetting)
+            for safety_setting in safety_settings
+        ]):
             vertexai_safety_settings = []
             for safety_setting in safety_settings:
                 if safety_setting["category"] not in VertexAIHarmCategory.__members__:
@@ -425,23 +728,16 @@ class GeminiClient:
         else:
             return safety_settings
 
-
-def _to_pil(data: str) -> Image.Image:
-    """
-    Converts a base64 encoded image data string to a PIL Image object.
-
-    This function first decodes the base64 encoded string to bytes, then creates a BytesIO object from the bytes,
-    and finally creates and returns a PIL Image object from the BytesIO object.
-
-    Parameters:
-        data (str): The base64 encoded image data string.
-
-    Returns:
-        Image.Image: The PIL Image object created from the input data.
-    """
-    return Image.open(BytesIO(base64.b64decode(data)))
+    @staticmethod
+    def _to_json_or_str(data: str) -> dict | str:
+        try:
+            json_data = json.loads(data)
+            return json_data
+        except (json.JSONDecodeError, ValidationError):
+            return data
 
 
+@require_optional_import(["PIL"], "gemini")
 def get_image_data(image_file: str, use_b64=True) -> bytes:
     if image_file.startswith("http://") or image_file.startswith("https://"):
         response = requests.get(image_file)
@@ -460,14 +756,80 @@ def get_image_data(image_file: str, use_b64=True) -> bytes:
         return content
 
 
-def calculate_gemini_cost(input_tokens: int, output_tokens: int, model_name: str) -> float:
-    if "1.5" in model_name or "gemini-experimental" in model_name:
-        # "gemini-1.5-pro-preview-0409"
-        # Cost is $7 per million input tokens and $21 per million output tokens
-        return 7.0 * input_tokens / 1e6 + 21.0 * output_tokens / 1e6
+def _format_json_response(response: Any, original_answer: str) -> str:
+    """Formats the JSON response for structured outputs using the format method if it exists."""
+    return response.format() if isinstance(response, FormatterProtocol) else original_answer
 
-    if "gemini-pro" not in model_name and "gemini-1.0-pro" not in model_name:
-        warnings.warn(f"Cost calculation is not implemented for model {model_name}. Using Gemini-1.0-Pro.", UserWarning)
 
-    # Cost is $0.5 per million input tokens and $1.5 per million output tokens
-    return 0.5 * input_tokens / 1e6 + 1.5 * output_tokens / 1e6
+def calculate_gemini_cost(use_vertexai: bool, input_tokens: int, output_tokens: int, model_name: str) -> float:
+    def total_cost_mil(cost_per_mil_input: float, cost_per_mil_output: float):
+        # Cost per million
+        return cost_per_mil_input * input_tokens / 1e6 + cost_per_mil_output * output_tokens / 1e6
+
+    def total_cost_k(cost_per_k_input: float, cost_per_k_output: float):
+        # Cost per thousand
+        return cost_per_k_input * input_tokens / 1e3 + cost_per_k_output * output_tokens / 1e3
+
+    model_name = model_name.lower()
+    up_to_128k = input_tokens <= 128000
+
+    if use_vertexai:
+        # Vertex AI pricing - based on Text input
+        # https://cloud.google.com/vertex-ai/generative-ai/pricing#vertex-ai-pricing
+
+        if "gemini-1.5-flash" in model_name:
+            if up_to_128k:
+                return total_cost_k(0.00001875, 0.000075)
+            else:
+                return total_cost_k(0.0000375, 0.00015)
+
+        elif "gemini-1.5-pro" in model_name:
+            if up_to_128k:
+                return total_cost_k(0.0003125, 0.00125)
+            else:
+                return total_cost_k(0.000625, 0.0025)
+
+        elif "gemini-1.0-pro" in model_name:
+            return total_cost_k(0.000125, 0.00001875)
+
+        else:
+            warnings.warn(
+                f"Cost calculation is not implemented for model {model_name}. Cost will be calculated zero.",
+                UserWarning,
+            )
+            return 0
+
+    else:
+        # Non-Vertex AI pricing
+
+        if "gemini-1.5-flash-8b" in model_name:
+            # https://ai.google.dev/pricing#1_5flash-8B
+            if up_to_128k:
+                return total_cost_mil(0.0375, 0.15)
+            else:
+                return total_cost_mil(0.075, 0.3)
+
+        elif "gemini-1.5-flash" in model_name:
+            # https://ai.google.dev/pricing#1_5flash
+            if up_to_128k:
+                return total_cost_mil(0.075, 0.3)
+            else:
+                return total_cost_mil(0.15, 0.6)
+
+        elif "gemini-1.5-pro" in model_name:
+            # https://ai.google.dev/pricing#1_5pro
+            if up_to_128k:
+                return total_cost_mil(1.25, 5.0)
+            else:
+                return total_cost_mil(2.50, 10.0)
+
+        elif "gemini-1.0-pro" in model_name:
+            # https://ai.google.dev/pricing#1_5pro
+            return total_cost_mil(0.50, 1.5)
+
+        else:
+            warnings.warn(
+                f"Cost calculation is not implemented for model {model_name}. Cost will be calculated zero.",
+                UserWarning,
+            )
+            return 0

@@ -1,46 +1,40 @@
-# Copyright (c) 2023 - 2024, Owners of https://github.com/ag2ai
+# Copyright (c) 2023 - 2025, AG2ai, Inc., AG2ai open-source projects maintainers and core contributors
 #
 # SPDX-License-Identifier: Apache-2.0
 #
 # Portions derived from  https://github.com/microsoft/autogen are under the MIT License.
 # SPDX-License-Identifier: MIT
-#!/usr/bin/env python3 -m pytest
+# !/usr/bin/env python3 -m pytest
 
-import os
-import sys
-from typing import Literal
+from collections.abc import Generator
+from tempfile import TemporaryDirectory
+from typing import Annotated, Literal, TypeVar
 
 import pytest
-from test_assistant_agent import KEY_LOC, OAI_CONFIG_LIST
-from typing_extensions import Annotated
 
 import autogen
-from autogen import AssistantAgent, GroupChat, GroupChatManager, UserProxyAgent, filter_config, initiate_chats
+from autogen import AssistantAgent, GroupChat, GroupChatManager, UserProxyAgent, initiate_chats
 from autogen.agentchat.chat import _post_process_carryover_item
 
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from conftest import reason, skip_openai  # noqa: E402
+from ..conftest import Credentials, credentials_all_llms, suppress_gemini_resource_exhausted
 
-config_list = (
-    []
-    if skip_openai
-    else autogen.config_list_from_json(
-        OAI_CONFIG_LIST,
-        file_location=KEY_LOC,
-    )
-)
 
-config_list_35 = (
-    []
-    if skip_openai
-    else autogen.config_list_from_json(
-        OAI_CONFIG_LIST,
-        file_location=KEY_LOC,
-        filter_dict={"tags": ["gpt-3.5-turbo"]},
-    )
-)
+@pytest.fixture
+def work_dir() -> Generator[str, None, None]:
+    with TemporaryDirectory() as temp_dir:
+        yield temp_dir
 
-config_list_tool = filter_config(config_list_35, {"tags": ["tool"]})
+
+@pytest.fixture
+def groupchat_work_dir() -> Generator[str, None, None]:
+    with TemporaryDirectory() as temp_dir:
+        yield temp_dir
+
+
+@pytest.fixture
+def tasks_work_dir() -> Generator[str, None, None]:
+    with TemporaryDirectory() as temp_dir:
+        yield temp_dir
 
 
 def test_chat_messages_for_summary():
@@ -64,8 +58,10 @@ def test_chat_messages_for_summary():
     assert len(messages) == 2
 
 
-@pytest.mark.skipif(skip_openai, reason=reason)
-def test_chats_group():
+@pytest.mark.openai
+def test_chats_group(
+    credentials_gpt_4o_mini: Credentials, work_dir: str, groupchat_work_dir: str, tasks_work_dir: str
+) -> None:
     financial_tasks = [
         """What are the full names of NVDA and TESLA.""",
         """Give lucky numbers for them.""",
@@ -79,7 +75,7 @@ def test_chats_group():
         human_input_mode="NEVER",
         code_execution_config={
             "last_n_messages": 1,
-            "work_dir": "groupchat",
+            "work_dir": work_dir,
             "use_docker": False,
         },
         is_termination_msg=lambda x: x.get("content", "") and x.get("content", "").rstrip().endswith("TERMINATE"),
@@ -87,12 +83,12 @@ def test_chats_group():
 
     financial_assistant = AssistantAgent(
         name="Financial_assistant",
-        llm_config={"config_list": config_list_35},
+        llm_config=credentials_gpt_4o_mini.llm_config,
     )
 
     writer = AssistantAgent(
         name="Writer",
-        llm_config={"config_list": config_list_35},
+        llm_config=credentials_gpt_4o_mini.llm_config,
         system_message="""
         You are a professional writer, known for
         your insightful and engaging articles.
@@ -106,7 +102,7 @@ def test_chats_group():
         system_message="""Critic. Double check plan, claims, code from other agents and provide feedback. Check whether the plan includes adding verifiable info such as source URL.
         Reply "TERMINATE" in the end when everything is done.
         """,
-        llm_config={"config_list": config_list_35},
+        llm_config=credentials_gpt_4o_mini.llm_config,
     )
 
     groupchat_1 = GroupChat(agents=[user_proxy, financial_assistant, critic], messages=[], max_round=3)
@@ -116,10 +112,10 @@ def test_chats_group():
     manager_1 = GroupChatManager(
         groupchat=groupchat_1,
         name="Research_manager",
-        llm_config={"config_list": config_list_35},
+        llm_config=credentials_gpt_4o_mini.llm_config,
         code_execution_config={
             "last_n_messages": 1,
-            "work_dir": "groupchat",
+            "work_dir": groupchat_work_dir,
             "use_docker": False,
         },
         is_termination_msg=lambda x: x.get("content", "").find("TERMINATE") >= 0,
@@ -127,10 +123,10 @@ def test_chats_group():
     manager_2 = GroupChatManager(
         groupchat=groupchat_2,
         name="Writing_manager",
-        llm_config={"config_list": config_list_35},
+        llm_config=credentials_gpt_4o_mini.llm_config,
         code_execution_config={
             "last_n_messages": 1,
-            "work_dir": "groupchat",
+            "work_dir": groupchat_work_dir,
             "use_docker": False,
         },
         is_termination_msg=lambda x: x.get("content", "").find("TERMINATE") >= 0,
@@ -142,26 +138,24 @@ def test_chats_group():
         is_termination_msg=lambda x: x.get("content", "") and x.get("content", "").rstrip().endswith("TERMINATE"),
         code_execution_config={
             "last_n_messages": 1,
-            "work_dir": "tasks",
+            "work_dir": tasks_work_dir,
             "use_docker": False,
         },  # Please set use_docker=True if docker is available to run the generated code. Using docker is safer than running the generated code directly.
     )
-    chat_res = user.initiate_chats(
-        [
-            {
-                "recipient": financial_assistant,
-                "message": financial_tasks[0],
-                "summary_method": "last_msg",
-                "max_turns": 1,
-            },
-            {
-                "recipient": manager_1,
-                "message": financial_tasks[1],
-                "summary_method": "reflection_with_llm",
-            },
-            {"recipient": manager_2, "message": writing_tasks[0]},
-        ]
-    )
+    chat_res = user.initiate_chats([
+        {
+            "recipient": financial_assistant,
+            "message": financial_tasks[0],
+            "summary_method": "last_msg",
+            "max_turns": 1,
+        },
+        {
+            "recipient": manager_1,
+            "message": financial_tasks[1],
+            "summary_method": "reflection_with_llm",
+        },
+        {"recipient": manager_2, "message": writing_tasks[0]},
+    ])
 
     chat_w_manager = chat_res[-1]
     print(chat_w_manager.chat_history, chat_w_manager.summary, chat_w_manager.cost)
@@ -173,8 +167,8 @@ def test_chats_group():
     print(all_res[1].summary)
 
 
-@pytest.mark.skipif(skip_openai, reason=reason)
-def test_chats():
+@pytest.mark.openai
+def test_chats(credentials_gpt_4o_mini: Credentials):
     import random
 
     class Function:
@@ -201,17 +195,17 @@ def test_chats():
     func = Function()
     financial_assistant_1 = AssistantAgent(
         name="Financial_assistant_1",
-        llm_config={"config_list": config_list_35},
+        llm_config=credentials_gpt_4o_mini.llm_config,
         function_map={"get_random_number": func.get_random_number},
     )
     financial_assistant_2 = AssistantAgent(
         name="Financial_assistant_2",
-        llm_config={"config_list": config_list_35},
+        llm_config=credentials_gpt_4o_mini.llm_config,
         function_map={"get_random_number": func.get_random_number},
     )
     writer = AssistantAgent(
         name="Writer",
-        llm_config={"config_list": config_list_35},
+        llm_config=credentials_gpt_4o_mini.llm_config,
         is_termination_msg=lambda x: x.get("content", "").find("TERMINATE") >= 0,
         system_message="""
             You are a professional writer, known for
@@ -227,7 +221,7 @@ def test_chats():
         is_termination_msg=lambda x: x.get("content", "").find("TERMINATE") >= 0,
         code_execution_config={
             "last_n_messages": 1,
-            "work_dir": "tasks",
+            "work_dir": tasks_work_dir,
             "use_docker": False,
         },  # Please set use_docker=True if docker is available to run the generated code. Using docker is safer than running the generated code directly.
     )
@@ -244,50 +238,48 @@ def test_chats():
     # )
     # print(chat_res_play.summary)
 
-    chat_res = user.initiate_chats(
-        [
-            {
-                "recipient": financial_assistant_1,
-                "message": financial_tasks[0],
-                "silent": False,
-                "summary_method": my_summary_method,
-                "verbose": True,
-                "max_turns": 1,
+    chat_res = user.initiate_chats([
+        {
+            "recipient": financial_assistant_1,
+            "message": financial_tasks[0],
+            "silent": False,
+            "summary_method": my_summary_method,
+            "verbose": True,
+            "max_turns": 1,
+        },
+        {
+            "recipient": financial_assistant_2,
+            "message": financial_tasks[1],
+            "silent": False,
+            "max_turns": 1,
+            "summary_method": "reflection_with_llm",
+            "verbose": True,
+        },
+        {
+            "recipient": financial_assistant_1,
+            "message": financial_tasks[2],
+            "summary_method": "last_msg",
+            "clear_history": False,
+            "max_turns": 1,
+        },
+        {
+            "recipient": financial_assistant_1,
+            "message": {
+                "content": "Let's play a game.",
+                "function_call": {"name": "get_random_number", "arguments": "{}"},
             },
-            {
-                "recipient": financial_assistant_2,
-                "message": financial_tasks[1],
-                "silent": False,
-                "max_turns": 1,
-                "summary_method": "reflection_with_llm",
-                "verbose": True,
-            },
-            {
-                "recipient": financial_assistant_1,
-                "message": financial_tasks[2],
-                "summary_method": "last_msg",
-                "clear_history": False,
-                "max_turns": 1,
-            },
-            {
-                "recipient": financial_assistant_1,
-                "message": {
-                    "content": "Let's play a game.",
-                    "function_call": {"name": "get_random_number", "arguments": "{}"},
-                },
-                "carryover": "I like even number.",
-                "summary_method": "last_msg",
-                "max_turns": 1,
-            },
-            {
-                "recipient": writer,
-                "message": writing_tasks[0],
-                "carryover": "Make the numbers relevant.",
-                "summary_method": "last_msg",
-                "max_turns": 1,
-            },
-        ]
-    )
+            "carryover": "I like even number.",
+            "summary_method": "last_msg",
+            "max_turns": 1,
+        },
+        {
+            "recipient": writer,
+            "message": writing_tasks[0],
+            "carryover": "Make the numbers relevant.",
+            "summary_method": "last_msg",
+            "max_turns": 1,
+        },
+    ])
 
     chat_w_writer = chat_res[-1]
     print(chat_w_writer.chat_history, chat_w_writer.summary, chat_w_writer.cost)
@@ -303,8 +295,8 @@ def test_chats():
     # print(blogpost.summary, insights_and_blogpost)
 
 
-@pytest.mark.skipif(skip_openai, reason=reason)
-def test_chats_general():
+@pytest.mark.openai
+def test_chats_general(credentials_gpt_4o_mini: Credentials, tasks_work_dir: str):
     financial_tasks = [
         """What are the full names of NVDA and TESLA.""",
         """Give lucky numbers for them.""",
@@ -315,15 +307,15 @@ def test_chats_general():
 
     financial_assistant_1 = AssistantAgent(
         name="Financial_assistant_1",
-        llm_config={"config_list": config_list_35},
+        llm_config=credentials_gpt_4o_mini.llm_config,
     )
     financial_assistant_2 = AssistantAgent(
         name="Financial_assistant_2",
-        llm_config={"config_list": config_list_35},
+        llm_config=credentials_gpt_4o_mini.llm_config,
     )
     writer = AssistantAgent(
         name="Writer",
-        llm_config={"config_list": config_list_35},
+        llm_config=credentials_gpt_4o_mini.llm_config,
         is_termination_msg=lambda x: x.get("content", "").find("TERMINATE") >= 0,
         system_message="""
             You are a professional writer, known for
@@ -339,7 +331,7 @@ def test_chats_general():
         is_termination_msg=lambda x: x.get("content", "").find("TERMINATE") >= 0,
         code_execution_config={
             "last_n_messages": 1,
-            "work_dir": "tasks",
+            "work_dir": tasks_work_dir,
             "use_docker": False,
         },  # Please set use_docker=True if docker is available to run the generated code. Using docker is safer than running the generated code directly.
     )
@@ -351,7 +343,7 @@ def test_chats_general():
         max_consecutive_auto_reply=3,
         code_execution_config={
             "last_n_messages": 1,
-            "work_dir": "tasks",
+            "work_dir": tasks_work_dir,
             "use_docker": False,
         },  # Please set use_docker=True if docker is available to run the generated code. Using docker is safer than running the generated code directly.
     )
@@ -359,42 +351,40 @@ def test_chats_general():
     def my_summary_method(recipient, sender, summary_args):
         return recipient.chat_messages[sender][1].get("content", "")
 
-    chat_res = initiate_chats(
-        [
-            {
-                "sender": user,
-                "recipient": financial_assistant_1,
-                "message": financial_tasks[0],
-                "silent": False,
-                "summary_method": my_summary_method,
-                "max_turns": 1,
-            },
-            {
-                "sender": user_2,
-                "recipient": financial_assistant_2,
-                "message": financial_tasks[1],
-                "silent": False,
-                "max_turns": 3,
-                "summary_method": "reflection_with_llm",
-            },
-            {
-                "sender": user,
-                "recipient": financial_assistant_1,
-                "message": financial_tasks[2],
-                "summary_method": "last_msg",
-                "clear_history": False,
-                "max_turns": 1,
-            },
-            {
-                "sender": user,
-                "recipient": writer,
-                "message": writing_tasks[0],
-                "carryover": "I want to include a figure or a table of data in the blogpost.",
-                "summary_method": "last_msg",
-                "max_turns": 2,
-            },
-        ]
-    )
+    chat_res = initiate_chats([
+        {
+            "sender": user,
+            "recipient": financial_assistant_1,
+            "message": financial_tasks[0],
+            "silent": False,
+            "summary_method": my_summary_method,
+            "max_turns": 1,
+        },
+        {
+            "sender": user_2,
+            "recipient": financial_assistant_2,
+            "message": financial_tasks[1],
+            "silent": False,
+            "max_turns": 3,
+            "summary_method": "reflection_with_llm",
+        },
+        {
+            "sender": user,
+            "recipient": financial_assistant_1,
+            "message": financial_tasks[2],
+            "summary_method": "last_msg",
+            "clear_history": False,
+            "max_turns": 1,
+        },
+        {
+            "sender": user,
+            "recipient": writer,
+            "message": writing_tasks[0],
+            "carryover": "I want to include a figure or a table of data in the blogpost.",
+            "summary_method": "last_msg",
+            "max_turns": 2,
+        },
+    ])
 
     chat_w_writer = chat_res[-1]
     print(chat_w_writer.chat_history, chat_w_writer.summary, chat_w_writer.cost)
@@ -407,8 +397,8 @@ def test_chats_general():
     # print(blogpost.summary, insights_and_blogpost)
 
 
-@pytest.mark.skipif(skip_openai, reason=reason)
-def test_chats_exceptions():
+@pytest.mark.openai
+def test_chats_exceptions(credentials_gpt_4o: Credentials, tasks_work_dir: str):
     financial_tasks = [
         """What are the full names of NVDA and TESLA.""",
         """Give lucky numbers for them.""",
@@ -417,11 +407,11 @@ def test_chats_exceptions():
 
     financial_assistant_1 = AssistantAgent(
         name="Financial_assistant_1",
-        llm_config={"config_list": config_list},
+        llm_config=credentials_gpt_4o.llm_config,
     )
     financial_assistant_2 = AssistantAgent(
         name="Financial_assistant_2",
-        llm_config={"config_list": config_list},
+        llm_config=credentials_gpt_4o.llm_config,
     )
     user = UserProxyAgent(
         name="User",
@@ -429,7 +419,7 @@ def test_chats_exceptions():
         is_termination_msg=lambda x: x.get("content", "").find("TERMINATE") >= 0,
         code_execution_config={
             "last_n_messages": 1,
-            "work_dir": "tasks",
+            "work_dir": tasks_work_dir,
             "use_docker": False,
         },  # Please set use_docker=True if docker is available to run the generated code. Using docker is safer than running the generated code directly.
     )
@@ -440,7 +430,7 @@ def test_chats_exceptions():
         is_termination_msg=lambda x: x.get("content", "").find("TERMINATE") >= 0,
         code_execution_config={
             "last_n_messages": 1,
-            "work_dir": "tasks",
+            "work_dir": tasks_work_dir,
             "use_docker": False,
         },  # Please set use_docker=True if docker is available to run the generated code. Using docker is safer than running the generated code directly.
     )
@@ -449,52 +439,47 @@ def test_chats_exceptions():
         AssertionError,
         match="summary_method must be a string chosen from 'reflection_with_llm' or 'last_msg' or a callable, or None.",
     ):
-        user.initiate_chats(
-            [
-                {
-                    "recipient": financial_assistant_1,
-                    "message": financial_tasks[0],
-                    "silent": False,
-                    "summary_method": "last_msg",
-                    "max_turns": 1,
-                },
-                {
-                    "recipient": financial_assistant_2,
-                    "message": financial_tasks[2],
-                    "summary_method": "llm",
-                    "clear_history": False,
-                    "max_turns": 1,
-                },
-            ]
-        )
+        user.initiate_chats([
+            {
+                "recipient": financial_assistant_1,
+                "message": financial_tasks[0],
+                "silent": False,
+                "summary_method": "last_msg",
+                "max_turns": 1,
+            },
+            {
+                "recipient": financial_assistant_2,
+                "message": financial_tasks[2],
+                "summary_method": "llm",
+                "clear_history": False,
+                "max_turns": 1,
+            },
+        ])
     with pytest.raises(
         AssertionError,
         match="llm client must be set in either the recipient or sender when summary_method is reflection_with_llm.",
     ):
-        user.initiate_chats(
-            [
-                {
-                    "recipient": financial_assistant_1,
-                    "message": financial_tasks[0],
-                    "silent": False,
-                    "summary_method": "last_msg",
-                    "max_turns": 1,
-                },
-                {
-                    "recipient": user_2,
-                    "message": financial_tasks[2],
-                    "clear_history": False,
-                    "summary_method": "reflection_with_llm",
-                    "max_turns": 1,
-                },
-            ]
-        )
+        user.initiate_chats([
+            {
+                "recipient": financial_assistant_1,
+                "message": financial_tasks[0],
+                "silent": False,
+                "summary_method": "last_msg",
+                "max_turns": 1,
+            },
+            {
+                "recipient": user_2,
+                "message": financial_tasks[2],
+                "clear_history": False,
+                "summary_method": "reflection_with_llm",
+                "max_turns": 1,
+            },
+        ])
 
 
-@pytest.mark.skipif(skip_openai, reason=reason)
-def test_chats_w_func():
+def _test_chats_w_func(credentials: Credentials, tasks_work_dir: str):
     llm_config = {
-        "config_list": config_list_tool,
+        "config_list": credentials.config_list,
         "timeout": 120,
     }
 
@@ -512,12 +497,12 @@ def test_chats_w_func():
         max_consecutive_auto_reply=10,
         code_execution_config={
             "last_n_messages": 1,
-            "work_dir": "tasks",
+            "work_dir": tasks_work_dir,
             "use_docker": False,
         },
     )
 
-    CurrencySymbol = Literal["USD", "EUR"]
+    CurrencySymbol = TypeVar("CurrencySymbol", bound=Literal["USD", "EUR"])
 
     def exchange_rate(base_currency: CurrencySymbol, quote_currency: CurrencySymbol) -> float:
         if base_currency == quote_currency:
@@ -547,9 +532,18 @@ def test_chats_w_func():
     print(res.summary, res.cost, res.chat_history)
 
 
-@pytest.mark.skipif(skip_openai, reason=reason)
-def test_udf_message_in_chats():
-    llm_config_35 = {"config_list": config_list_35}
+@pytest.mark.parametrize("credentials_from_test_param", credentials_all_llms, indirect=True)
+@suppress_gemini_resource_exhausted
+def test_chats_w_func(
+    credentials_from_test_param: Credentials,
+    tasks_work_dir: str,
+) -> None:
+    _test_chats_w_func(credentials_from_test_param, tasks_work_dir)
+
+
+@pytest.mark.openai
+def test_udf_message_in_chats(credentials_gpt_4o_mini: Credentials, tasks_work_dir: str) -> None:
+    llm_config_40mini = credentials_gpt_4o_mini.llm_config
 
     research_task = """
     ## NVDA (NVIDIA Corporation)
@@ -570,7 +564,7 @@ def test_udf_message_in_chats():
 
         try:
             filename = context.get("work_dir", "") + "/stock_prices.md"
-            with open(filename, "r") as file:
+            with open(filename) as file:
                 data = file.read()
         except Exception as e:
             data = f"An error occurred while reading the file: {e}"
@@ -579,11 +573,11 @@ def test_udf_message_in_chats():
 
     researcher = autogen.AssistantAgent(
         name="Financial_researcher",
-        llm_config=llm_config_35,
+        llm_config=llm_config_40mini,
     )
     writer = autogen.AssistantAgent(
         name="Writer",
-        llm_config=llm_config_35,
+        llm_config=llm_config_40mini,
         system_message="""
             You are a professional writer, known for
             your insightful and engaging articles.
@@ -598,40 +592,38 @@ def test_udf_message_in_chats():
         is_termination_msg=lambda x: x.get("content", "") and x.get("content", "").rstrip().endswith("TERMINATE"),
         code_execution_config={
             "last_n_messages": 1,
-            "work_dir": "tasks",
+            "work_dir": tasks_work_dir,
             "use_docker": False,
         },  # Please set use_docker=True if docker is available to run the generated code. Using docker is safer than running the generated code directly.
     )
 
-    chat_results = autogen.initiate_chats(
-        [
-            {
-                "sender": user_proxy_auto,
-                "recipient": researcher,
-                "message": research_task,
-                "clear_history": True,
-                "silent": False,
-                "max_turns": 2,
-            },
-            {
-                "sender": user_proxy_auto,
-                "recipient": writer,
-                "message": my_writing_task,
-                "max_turns": 2,  # max number of turns for the conversation (added for demo purposes, generally not necessarily needed)
-                "summary_method": "reflection_with_llm",
-                "work_dir": "tasks",
-            },
-        ]
-    )
+    chat_results = autogen.initiate_chats([
+        {
+            "sender": user_proxy_auto,
+            "recipient": researcher,
+            "message": research_task,
+            "clear_history": True,
+            "silent": False,
+            "max_turns": 2,
+        },
+        {
+            "sender": user_proxy_auto,
+            "recipient": writer,
+            "message": my_writing_task,
+            "max_turns": 2,  # max number of turns for the conversation (added for demo purposes, generally not necessarily needed)
+            "summary_method": "reflection_with_llm",
+            "work_dir": tasks_work_dir,
+        },
+    ])
     print(chat_results[0].summary, chat_results[0].cost)
     print(chat_results[1].summary, chat_results[1].cost)
 
 
 def test_post_process_carryover_item():
     gemini_carryover_item = {"content": "How can I help you?", "role": "model"}
-    assert (
-        _post_process_carryover_item(gemini_carryover_item) == gemini_carryover_item["content"]
-    ), "Incorrect carryover postprocessing"
+    assert _post_process_carryover_item(gemini_carryover_item) == gemini_carryover_item["content"], (
+        "Incorrect carryover postprocessing"
+    )
     carryover_item = "How can I help you?"
     assert _post_process_carryover_item(carryover_item) == carryover_item, "Incorrect carryover postprocessing"
 
